@@ -3,7 +3,9 @@ import ultralytics
 from ultralytics import YOLO
 import cv2
 import re
-from alignment import straighten_plate_from_image
+
+from preprocessing import preprocessing_image
+from true_letters import true_letters_num, true_letters_reg
 
 
 """
@@ -141,7 +143,7 @@ class RecognizePlate:
 
         :param path_2_model: Путь к модели EasyOCR (необязательно)
         """
-        self.__model_recognize = easyocr.Reader(['ru'])
+        self.__model_recognize = easyocr.Reader(['en'], gpu=True, recog_network='custom_model')
 
     def recognize(self, image: 'cv2.imread') -> str:
         """
@@ -153,37 +155,35 @@ class RecognizePlate:
 
         detection_results = self.__detection_plate(image)
 
-        best_result = None
-        best_score = 0
-
         for box in detection_results[0].boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
             cropped = image[y1:y2, x1:x2]  # Обрезаем изображение по координатам
 
-            # Применяем выравнивание к обрезанному изображению
-            aligned_images = straighten_plate_from_image(cropped)
+            # Применяем выравнивание и предобработку к обрезанному изображению
+            img = preprocessing_image(self.__model_recognize, cropped)
 
-            for aligned in aligned_images:
-                ocr_results = self.__model_recognize.readtext(aligned)
+            # Разделим изображение
+            height, width = img.shape
+            right_width = 190  # 155
+            right_part = img[:, width - right_width:]
+            right_width = 130
+            left_part = img[:, :width - right_width]
 
-                for (bbox, text, prob) in ocr_results:
-                    text_cleaned = self.clean_string(text.replace(" ", "").upper())
+            # Обрежем верхушку у региона
+            right_part[:8] = 255
 
-                    pattern_match = self.match_pattern_plate(text_cleaned)
-                    score = 0
-                    if pattern_match:
-                        score += 10  # приоритет полному совпадению с шаблоном
-                    score += len(text_cleaned)  # приоритет длине
+            # Распознавание с EasyOCR для левой и правой частей
+            symbols = "0123456789ABEKMHPCTYXabekmhptxy"
+            ocr_left = self.__model_recognize.readtext(left_part, allowlist=symbols)
+            ocr_right = self.__model_recognize.readtext(right_part, allowlist=symbols)
 
-                    if score > best_score:
-                        best_score = score
-                        best_result = pattern_match or text_cleaned
+            # Объединяем результаты
+            text_left = "".join([item[1].upper() for item in ocr_left])
+            text_right = "".join([item[1].upper() for item in ocr_right])
+            text = true_letters_num(text_left) + true_letters_reg(text_right)
+            return text
 
-        # Альтернатива — попытаться распознать из необработанного куска изображения через YOLO
-        if not best_result:
-            best_result = self.__recognize_text(image, detection_results)
-
-        return best_result
+        return ""
 
     def __detection_plate(self, image) -> 'ultralytics.engine.results.Boxes':
         """
