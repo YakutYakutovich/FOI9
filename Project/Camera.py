@@ -1,71 +1,54 @@
+from Recognition import RecognizePlate
 import cv2
-import numpy as np
+import time
 
 
-def order_points(pts):
-    rect = np.zeros((4, 2), dtype="float32")
-    s = pts.sum(axis=1)
-    diff = np.diff(pts, axis=1)
-
-    rect[0] = pts[np.argmin(s)]     # top-left
-    rect[2] = pts[np.argmax(s)]     # bottom-right
-    rect[1] = pts[np.argmin(diff)]  # top-right
-    rect[3] = pts[np.argmax(diff)]  # bottom-left
-    return rect
+# Инициализация объекта для распознавания номера
+recog = RecognizePlate()
+recog.load_detection_model('models/best.pt')
+recog.load_recognize_model('')
 
 
-def four_point_transform(image, pts):
-    rect = order_points(pts)
-    (tl, tr, br, bl) = rect
+# Обычно виртуальная камера OBS находится на индексе 0 или 1
+class Camera:
+    def __init__(self):
+        self.__camera_index = 1
+        self.__cap = cv2.VideoCapture(self.__camera_index)
 
-    widthA = np.linalg.norm(br - bl)
-    widthB = np.linalg.norm(tr - tl)
-    maxWidth = max(int(widthA), int(widthB))
+    def __check_opened(self):
+        if not self.__cap.isOpened():
+            print("Не удалось открыть видеопоток.")
+            exit()
 
-    heightA = np.linalg.norm(tr - br)
-    heightB = np.linalg.norm(tl - bl)
-    maxHeight = max(int(heightA), int(heightB))
+    def __get_frame(self):
+        ret, frame = self.__cap.read()
+        return frame.copy()
 
-    dst = np.array([
-        [0, 0],
-        [maxWidth - 1, 0],
-        [maxWidth - 1, maxHeight - 1],
-        [0, maxHeight - 1]
-    ], dtype="float32")
+    def see(self):
+        self.__check_opened()
 
-    M = cv2.getPerspectiveTransform(rect, dst)
-    warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-    return warped
+        while True:
+            # Получаем кадр с камеры
+            frame = self.__get_frame()
 
+            # Распознаем номер на кадре
+            print(recog.recognize(frame))
 
-def straighten_plate_from_image(original):
-    gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
-    high_contrast = cv2.equalizeHist(gray)
+            # Отображаем кадр в окне
+            # cv2.imshow("Camera Feed", frame)
+            # time.sleep(3)
+            # cv2.destroyWindow("Camera Feed")
 
-    versions = {
-        'original': original,
-        'high': cv2.cvtColor(high_contrast, cv2.COLOR_GRAY2BGR),
-    }
+            # Ждем 1 секунду и проверяем нажатие клавиши для выхода
+            # if cv2.waitKey(1) & 0xFF == ord('q'):  # Если нажать 'q', программа завершится
+            #     break
 
-    results = []
+            # Ждем 1 секунду
+            time.sleep(1)
 
-    for key in ['original', 'high']:
-        processed = versions[key]
-        gray_for_contours = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.threshold(gray_for_contours, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        # Закрываем окно после завершения работы
+        self.__cap.release()
+        cv2.destroyAllWindows()
 
-        cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
-
-        for c in cnts:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.04 * peri, True)
-            if len(approx) == 4:
-                box = np.array(approx.reshape(4, 2), dtype="float32")
-                warped = four_point_transform(original, box)
-                results.append(warped)
-                break
-        else:
-            results.append(original)
-
-    return tuple(results)  # (original_warped, high_contrast_warped)
+# Запуск камеры
+Camera().see()
